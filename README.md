@@ -29,7 +29,7 @@ Type to talk; `quit` or Ctrl-D to leave.
 | Tier | What it adds | Status |
 |------|--------------|--------|
 | 1 | The brain — text conversation loop with session memory | ✅ |
-| 2 | The hands — tool registry the model can call | ⬜ |
+| 2 | The hands — tool registry the model can call | ✅ |
 | 3 | The ears & mouth — push-to-talk voice (Deepgram + ElevenLabs) | ⬜ |
 | 4 | The memory — durable facts across restarts | ⬜ |
 | 5 | The heartbeat — proactive background loop | ⬜ |
@@ -39,8 +39,26 @@ Type to talk; `quit` or Ctrl-D to leave.
 
 ```bash
 python tests/test_tier1_brain.py     # core loop, no network needed
+python tests/test_tier2_tools.py     # tool registry + tool loop, no network
 ```
 
 **Tier 1 by hand:** run `python -m jarvis`, hold a short back-and-forth, and
 confirm it remembers earlier turns. Kill and restart it — it forgets everything
 (expected; durable memory is Tier 4).
+
+**Tier 2 by hand:** ask "what's on my list?" or "remind me to buy milk
+tomorrow" and watch the tool activity line appear, then a natural reply. Notes
+live in `notes/` (any `.md`/`.txt`); ask about something written there.
+
+### First tools
+
+| Tool | Job | Consequential? |
+|------|-----|----------------|
+| `add_reminder`, `list_reminders` | reminders | no |
+| `delete_reminder` | reminders | yes (deletes data) |
+| `search_notes` | notes Q&A | no (read-only) |
+| `draft_message` | drafting | no (draft only) |
+| `send_message` | drafting | yes (sends) |
+
+Add a capability by writing one self-contained tool module and registering it
+in `jarvis/tools/__init__.py` — the core loop never changes.
