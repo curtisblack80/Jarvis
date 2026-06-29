@@ -8,6 +8,7 @@ them on your next return.
 
 from __future__ import annotations
 
+from .. import control
 from ..config import Config
 from .checks import build_checks
 from .heartbeat import Heartbeat
@@ -22,7 +23,13 @@ def main() -> int:
     def announce(notice) -> None:
         print(f"🔔 {name}: {notice.text}  (#{notice.id})", flush=True)
 
-    heartbeat = Heartbeat(build_checks(config), inbox, config, on_alert=announce)
+    heartbeat = Heartbeat(
+        build_checks(config),
+        inbox,
+        config,
+        on_alert=announce,
+        is_paused=control.is_paused,  # honors the kill switch too
+    )
     print(f"{name} heartbeat running ({len(heartbeat.checks)} checks). Ctrl-C to stop.")
     try:
         heartbeat.run_forever()

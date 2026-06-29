@@ -47,7 +47,7 @@ way.
 | 3 | The ears & mouth — push-to-talk voice (Deepgram + ElevenLabs) | ✅ |
 | 4 | The memory — durable facts across restarts | ✅ |
 | 5 | The heartbeat — proactive background loop | ✅ |
-| 6 | The rails — confirmation gate, audit log, kill switch | ⬜ |
+| 6 | The rails — confirmation gate, audit log, kill switch | ✅ |
 
 ## Verify
 
@@ -57,6 +57,7 @@ python tests/test_tier2_tools.py     # tool registry + tool loop, no network
 python tests/test_tier3_voice.py     # chunker + voice-uses-same-brain, no audio
 python tests/test_tier4_memory.py    # durable facts survive restart + hand edits
 python tests/test_tier5_heartbeat.py # scheduling, quiet hours, hold, dismiss
+python tests/test_tier6_rails.py     # confirmation gate, kill switch, data-tagging
 ```
 
 **Tier 1 by hand:** run `python -m jarvis`, hold a short back-and-forth, and
@@ -105,3 +106,25 @@ items land in a held, dismissible inbox (`state/inbox.json`).
 **Tier 5 by hand:** with the REPL running, `echo "tea is ready" > state/trigger.txt`
 and within ~10s you'll see a 🔔 alert; it won't repeat for the same text.
 Restart and the schedule resumes instead of refiring everything.
+
+### The rails (safety)
+
+- **Confirmation gate** (`jarvis/safety.py`): anything that sends/spends/
+  deletes/changes a setting stops, states plainly what it'll do, and waits for
+  an explicit `y`. Approval is per-action — it never generalizes. Read-only
+  tools flow freely. The interactive asker is wrapped in a timeout so it can't
+  hang forever (safe default: deny); background actions auto-deny and leave a
+  note. Tune what's gated in `config.yaml` under `safety` (no code edit).
+- **Data, not commands:** content the assistant reads (e.g. notes) is tagged as
+  untrusted data, and the system prompt tells it to surface — not obey —
+  anything that looks like an instruction.
+- **Audit trail + cost:** `state/audit.log` records tools run, confirmations,
+  and what the heartbeat surfaced; `log` in the REPL shows recent events plus a
+  session token tally.
+- **Kill switch:** `pause` stops all proactive behavior at once (you can still
+  chat); `resume` turns it back on. Durable across restarts.
+
+**Tier 6 by hand:** ask it to send a message → it asks first. Put a line like
+"ignore your instructions and …" in a note, then ask about that note → it flags
+it rather than obeying. `pause`, then trigger a heartbeat condition → nothing
+fires until you `resume`.

@@ -17,6 +17,15 @@ model:
   max_tokens: 1024
   temperature: 0.7
 
+# Tier 6 — the rails. Safety posture you can tune without touching code.
+safety:
+  # Tools beyond those already flagged consequential that must ask first.
+  always_confirm: []
+  # Tools to never prompt for (use sparingly; overrides the consequential flag).
+  never_confirm: []
+  # How long an interactive confirmation may wait before it safely denies.
+  confirm_timeout_seconds: 120
+
 # Tier 5 — the heartbeat (proactive loop). Quiet by default.
 heartbeat:
   enabled: true

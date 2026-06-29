@@ -20,6 +20,7 @@ import time
 from datetime import datetime, time as dtime
 from typing import Callable
 
+from .. import audit
 from ..storage import load_json, save_json
 from .checks import Check
 from .inbox import Inbox, Notice
@@ -104,7 +105,9 @@ class Heartbeat:
 
     def _surface(self, check: str, text: str, urgency: str, now: float) -> Notice:
         notice = self.inbox.add(check, text, urgency)  # always held for catch-up
-        if self._should_interrupt(urgency, now) and self.on_alert:
+        interrupt = self._should_interrupt(urgency, now)
+        audit.log("surfaced", check=check, urgency=urgency, interrupt=interrupt)
+        if interrupt and self.on_alert:
             self.on_alert(notice)
         return notice
 

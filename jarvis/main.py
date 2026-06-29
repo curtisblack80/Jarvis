@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import sys
 
+from . import audit, control
 from .agent import Agent, build_system_prompt
 from .config import Config, ConfigError
 from .memory import Memory
 from .provider import ProviderError, build_provider
+from .safety import ConfirmationGate, interactive_asker, timeout_asker
 from .tools import build_default_registry
 
 
@@ -33,8 +35,22 @@ def run(argv: list[str] | None = None) -> int:
     name = config.get("identity.name", "Jarvis")
     memory = Memory()
     registry = build_default_registry(config, memory=memory)
+
+    # The confirmation gate: a human asker, wrapped in a timeout so it can never
+    # hang forever (safe default = deny). Same gate covers every front-end.
+    gate = ConfirmationGate(
+        config,
+        timeout_asker(
+            interactive_asker(),
+            float(config.get("safety.confirm_timeout_seconds", 120)),
+        ),
+    )
     agent = Agent(
-        provider, build_system_prompt(config), registry=registry, memory=memory
+        provider,
+        build_system_prompt(config),
+        registry=registry,
+        memory=memory,
+        confirmer=gate.confirm,
     )
 
     inbox = _start_heartbeat(config, name)
@@ -66,7 +82,13 @@ def _start_heartbeat(config, name: str):
         # An alert interrupts: print it where the user will see it.
         print(f"\n\n  🔔 {name}: {notice.text}  (#{notice.id})\nyou › ", end="", flush=True)
 
-    heartbeat = Heartbeat(build_checks(config), inbox, config, on_alert=announce)
+    heartbeat = Heartbeat(
+        build_checks(config),
+        inbox,
+        config,
+        on_alert=announce,
+        is_paused=control.is_paused,  # the kill switch
+    )
     heartbeat.start()
     return inbox
 
@@ -100,8 +122,8 @@ def _run_text(agent: Agent, name: str, *, n_tools: int, inbox=None) -> int:
     n_facts = len(agent.memory.facts()) if agent.memory else 0
     knows = f", remembering {n_facts} things about you" if n_facts else ""
     print(
-        f"{name} is awake with {n_tools} tools{knows}. "
-        f"Type to talk; 'notices' to see what it raised; Ctrl-D or 'quit' to leave.\n"
+        f"{name} is awake with {n_tools} tools{knows}.\n"
+        f"  commands: notices · dismiss <id> · pause · resume · log · quit\n"
     )
 
     # Catch-up-on-return: show anything the heartbeat held while you were away.
@@ -112,7 +134,9 @@ def _run_text(agent: Agent, name: str, *, n_tools: int, inbox=None) -> int:
         print("  (type 'dismiss <id>' to clear, or 'dismiss all')\n")
 
     def show_tool(tool_name: str, args: dict) -> None:
-        # While building, it helps to see the hands move.
+        # While building, it helps to see the hands move — and it's the audit
+        # trail for which tools ran.
+        audit.log("tool_call", tool=tool_name, args=_brief(args))
         print(f"\n  · {tool_name}({_brief(args)})", flush=True)
         print(f"{name} › ", end="", flush=True)
 
@@ -130,6 +154,8 @@ def _run_text(agent: Agent, name: str, *, n_tools: int, inbox=None) -> int:
             return 0
         if inbox is not None and _handle_inbox_command(user_text, inbox):
             continue
+        if _handle_control_command(user_text, name, agent):
+            continue
 
         # Stream the reply as it's generated — feels alive, and it's the same
         # streaming voice will lean on in Tier 3.
@@ -141,11 +167,45 @@ def _run_text(agent: Agent, name: str, *, n_tools: int, inbox=None) -> int:
                 on_tool=show_tool,
             )
             print("\n")
+            audit.log(
+                "turn",
+                in_tokens=agent.total_input_tokens,
+                out_tokens=agent.total_output_tokens,
+            )
         except ProviderError as exc:
             # The model was slow or unreachable — shrug it off, don't crash.
             print(f"\n[!] I couldn't reach the model just now: {exc}\n")
 
     # Unreachable, but keeps type checkers happy.
+
+
+def _handle_control_command(text: str, name: str, agent: Agent) -> bool:
+    """Handle the kill switch and audit log commands."""
+    low = text.lower().strip()
+    if low in {"pause", "kill", "stop proactive"}:
+        control.set_paused(True)
+        audit.log("kill_switch", paused=True)
+        print(f"  ⏸  Proactive behavior paused. You can still talk to {name}.\n")
+        return True
+    if low in {"resume", "unpause"}:
+        control.set_paused(False)
+        audit.log("kill_switch", paused=False)
+        print("  ▶  Proactive behavior resumed.\n")
+        return True
+    if low in {"log", "audit"}:
+        events = audit.tail(15)
+        if not events:
+            print("  (audit log empty)\n")
+        for e in events:
+            extra = {k: v for k, v in e.items() if k not in {"ts", "event"}}
+            print(f"  {e['event']}: {extra}")
+        cost = (
+            f"  ~tokens this session: in={agent.total_input_tokens} "
+            f"out={agent.total_output_tokens}\n"
+        )
+        print(cost)
+        return True
+    return False
 
 
 def _handle_inbox_command(text: str, inbox) -> bool:

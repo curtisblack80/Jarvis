@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import ROOT
+from ..safety import wrap_external
 from .base import Tool, ToolResult
 
 _NOTES_DIR_DEFAULT = "notes"
@@ -47,7 +48,9 @@ def _make_search(notes_dir: Path):
 
         if not hits:
             return ToolResult(f"No notes matched '{args['query']}'.")
-        return ToolResult("Matching notes:\n" + "\n".join(hits))
+        # Notes are content the assistant reads — tag them as data, not commands,
+        # so a note that says "ignore your rules" can't act as an instruction.
+        return ToolResult(wrap_external("Matching notes:\n" + "\n".join(hits)))
 
     return _search
 
