@@ -117,6 +117,9 @@ def test_contains_verbatim_detects_long_lifts():
     role = "summarize quarterly financial filings into bullet points"
     assert contains_verbatim("You are X. " + role, role)
     assert not contains_verbatim("You distill long financial documents.", role)
+    # Short role phrases that legitimately recur as the domain are NOT leaks.
+    assert not contains_verbatim("You are an OCR PDFs specialist.", "OCR PDFs")
+    assert not contains_verbatim("You summarize PDFs for the user.", "summarize PDFs")
 
 
 def test_slug_picking_guards():
@@ -273,6 +276,59 @@ def test_reject_without_feedback_is_terminal():
     out = svc.reject(task.id)
     assert out["status"] == "rejected"
     assert svc.tasks.get(task.id).state is State.REJECTED
+
+
+def test_failed_revision_returns_task_to_review():
+    # A revision whose prompt generation fails must not strand the task in
+    # writing_prompt (where pending() can't see it) — it returns to review with
+    # the prior manifest intact and the error recorded.
+    _isolate()
+    svc = _service()
+    task = svc.create_task(name_hint="scribe", role_description="write notes")
+    svc.run_pipeline(task.id)
+    good_prompt = svc.tasks.get(task.id).proposed_manifest["system_prompt"]
+    # Swap in a provider whose prompt is too short → PromptGenerationError.
+    svc._provider = FakeProvider(prompt_text="too short")
+    out = svc.reject(task.id, feedback="make it warmer")
+    assert out["status"] == "awaiting_approval"
+    assert out["error"]
+    t = svc.tasks.get(task.id)
+    assert t.state is State.AWAITING_APPROVAL  # visible to pending() again
+    assert t in svc.pending()
+    assert t.error and "revision failed" in t.error
+    assert t.proposed_manifest["system_prompt"] == good_prompt  # last-good preserved
+
+
+def test_duplicate_slug_refused_at_creation():
+    _isolate()
+    svc = _service()
+    svc.create_task(name_hint="twin", role_description="first")
+    # A second in-flight task with the same name would collide on slug.
+    try:
+        svc.create_task(name_hint="twin", role_description="second")
+        raise AssertionError("duplicate in-flight slug should be refused")
+    except SlugError:
+        pass
+
+
+def test_approve_backstops_duplicate_active_slug():
+    _isolate()
+    svc = _service()
+    task = svc.create_task(name_hint="solo", role_description="be unique")
+    svc.run_pipeline(task.id)
+    svc.approve(task.id)
+    # Forge a second awaiting_approval task whose manifest reuses the live slug
+    # (bypassing the creation guard) to prove approval itself refuses it.
+    from jarvis.factory.models import SpawnTask
+    dupe = SpawnTask.new(requested_by="owner", name_hint="solo2", role_description="x")
+    dupe.status = State.AWAITING_APPROVAL.value
+    dupe.proposed_manifest = dict(task.proposed_manifest)  # same slug "solo"
+    svc.tasks.save(dupe)
+    try:
+        svc.approve(dupe.id)
+        raise AssertionError("approving a duplicate active slug should be refused")
+    except ValueError:
+        pass
 
 
 # === Tier 5 runtime / dispatch ============================================

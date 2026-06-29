@@ -25,7 +25,8 @@ from .pipeline import SpawnPipeline
 from .repo import ResearchReportRepo, SpawnedAgentRepo, SpawnTaskRepo
 from .runtime import ConfigDrivenAgent, RegistryWatcher
 from .sanitize import sanitize
-from .slugs import pick_slug
+from .slugs import pick_slug, slugify
+from .state import TERMINAL
 
 # Strong references to background pipeline threads so a fire-and-forget run can't
 # be collected mid-flight (the threaded analogue of the asyncio weak-ref trap).
@@ -82,6 +83,14 @@ class FactoryService:
 
     # --- create (daily cap + sanitization enforced here) -------------------
 
+    def _inflight_slugs(self) -> set[str]:
+        """Slugs claimed by tasks that haven't reached a terminal state yet."""
+        return {
+            slugify(t.name_hint)
+            for t in self.tasks.all()
+            if t.state not in TERMINAL
+        }
+
     def create_task(
         self,
         *,
@@ -95,10 +104,13 @@ class FactoryService:
         reqs = sanitize(special_requirements, field="special requirements") if special_requirements else ""
         name = sanitize(name_hint, field="name").strip()
 
-        # Fail the cheap, obvious checks before recording the task.
+        # Fail the cheap, obvious checks before recording the task. Reserve the
+        # slugs of in-flight (non-terminal) tasks too, so two same-named tasks
+        # can't both be staged and then collide when both are approved.
+        taken = self.agents.slugs() | self._inflight_slugs()
         pick_slug(
             name,
-            taken_slugs=self.agents.slugs(),
+            taken_slugs=taken,
             tool_names={t.name for t in self.registry.list_all()},
         )
 

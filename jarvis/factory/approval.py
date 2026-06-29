@@ -52,6 +52,14 @@ def handle_approve(
         raise ValueError("task not in approvable state")
     p = task.proposed_manifest or {}
 
+    # Backstop the slug uniqueness check at approval time: two same-named tasks
+    # could have been staged before either was approved, and approving both
+    # would make dispatch_to_<slug> ambiguous. (Creation also reserves in-flight
+    # slugs; this guards the residual race.)
+    existing = agents.by_slug(p["slug"])
+    if existing is not None and existing.status == "active":
+        raise ValueError(f"an active agent already uses slug '{p['slug']}'")
+
     agent = SpawnedAgent(
         id=_new_id(),
         slug=p["slug"],
@@ -117,15 +125,30 @@ def handle_reject(
     report = report_row.skills_report()
 
     tasks.transition(task_id, State.WRITING_PROMPT)
-    new_prompt = spec_mod.generate_system_prompt(
-        name=manifest["name"],
-        role_description=task.role_description,
-        special_requirements=task.special_requirements,
-        report=report,
-        provider=provider,
-        prior_prompt=manifest.get("system_prompt"),
-        revision_feedback=feedback,
-    )
+    try:
+        new_prompt = spec_mod.generate_system_prompt(
+            name=manifest["name"],
+            role_description=task.role_description,
+            special_requirements=task.special_requirements,
+            report=report,
+            provider=provider,
+            prior_prompt=manifest.get("system_prompt"),
+            revision_feedback=feedback,
+        )
+    except Exception as exc:  # noqa: BLE001 — a failed revision must not strand the task
+        # generate_system_prompt can fail (provider outage, too-short output, the
+        # verbatim-leak guard). The prior manifest still holds the last-good
+        # prompt, so return the task to review rather than leaving it stuck in
+        # WRITING_PROMPT, where pending() can't see it and it vanishes.
+        tasks.set_error(task_id, f"revision failed: {exc}")
+        tasks.transition(task_id, State.AWAITING_APPROVAL)
+        emit_event("revision_failed", {"task_id": task_id, "error": str(exc)})
+        return {
+            "status": "awaiting_approval",
+            "error": str(exc),
+            "approval_iterations": task.approval_iterations,
+        }
+
     manifest["system_prompt"] = new_prompt
     tasks.set_manifest(task_id, manifest)
     tasks.transition(task_id, State.AWAITING_APPROVAL)

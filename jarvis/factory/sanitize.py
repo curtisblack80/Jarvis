@@ -71,8 +71,12 @@ def contains_verbatim(haystack: str, needle: str, *, min_run: int = 24) -> bool:
     lift is the signal we reject.
     """
     needle = (needle or "").strip()
+    # Only a long contiguous lift counts. A phrase shorter than the window can't
+    # contain a min_run-length run, and short role descriptions (e.g. "OCR PDFs",
+    # "summarize PDFs") will legitimately recur as the agent's stated domain —
+    # flagging those would fail otherwise-usable prompt generation.
     if len(needle) < min_run:
-        return needle.lower() in haystack.lower() if needle else False
+        return False
     hay = haystack.lower()
     # Slide a window of min_run chars; any verbatim run is a hit.
     low = needle.lower()
