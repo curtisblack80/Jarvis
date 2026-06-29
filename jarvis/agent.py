@@ -10,10 +10,13 @@ is ready to answer — and it reasons over tool failures instead of crashing.
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from .provider import OnText, Provider, ToolCall, TurnResult
 from .tools import ToolRegistry, ToolResult
+
+if TYPE_CHECKING:
+    from .memory import Memory
 
 SYSTEM_TEMPLATE = """\
 You are {name}, a voice-first personal assistant.
@@ -58,14 +61,23 @@ class Agent:
         system_prompt: str,
         registry: ToolRegistry | None = None,
         confirmer: Confirmer | None = None,
+        memory: "Memory | None" = None,
     ):
         self.provider = provider
         self.system_prompt = system_prompt
         self.registry = registry
         self.confirmer = confirmer
+        self.memory = memory
         self.history: list[dict[str, Any]] = []
         self.total_input_tokens = 0
         self.total_output_tokens = 0
+
+    def effective_system(self) -> str:
+        """Base prompt plus durable memory, recomputed each turn so facts the
+        assistant learns mid-session are reflected immediately."""
+        if self.memory is None:
+            return self.system_prompt
+        return self.system_prompt + self.memory.as_prompt_block()
 
     def send(
         self,
@@ -84,11 +96,12 @@ class Agent:
         self, *, on_text: OnText | None, on_tool: OnTool | None
     ) -> str:
         tools = self.registry.specs() if self.registry else None
+        system = self.effective_system()
         last_text = ""
 
         for _ in range(MAX_TOOL_ROUNDS):
             result = self.provider.complete(
-                self.system_prompt, self.history, tools=tools, on_text=on_text
+                system, self.history, tools=tools, on_text=on_text
             )
             self._account(result)
             last_text = result.text

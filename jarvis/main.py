@@ -14,6 +14,7 @@ import sys
 
 from .agent import Agent, build_system_prompt
 from .config import Config, ConfigError
+from .memory import Memory
 from .provider import ProviderError, build_provider
 from .tools import build_default_registry
 
@@ -30,8 +31,11 @@ def run(argv: list[str] | None = None) -> int:
         return 2
 
     name = config.get("identity.name", "Jarvis")
-    registry = build_default_registry(config)
-    agent = Agent(provider, build_system_prompt(config), registry=registry)
+    memory = Memory()
+    registry = build_default_registry(config, memory=memory)
+    agent = Agent(
+        provider, build_system_prompt(config), registry=registry, memory=memory
+    )
 
     if want_voice and _start_voice(agent, config, name):
         return 0  # voice ran (and has now exited)
@@ -67,8 +71,10 @@ def _start_voice(agent: Agent, config, name: str) -> bool:
 
 
 def _run_text(agent: Agent, name: str, *, n_tools: int) -> int:
+    n_facts = len(agent.memory.facts()) if agent.memory else 0
+    knows = f", remembering {n_facts} things about you" if n_facts else ""
     print(
-        f"{name} is awake with {n_tools} tools. "
+        f"{name} is awake with {n_tools} tools{knows}. "
         f"Type to talk; Ctrl-D or 'quit' to leave.\n"
     )
 
