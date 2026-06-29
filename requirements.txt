@@ -1,0 +1,10 @@
+# Tier 1 — the brain
+anthropic>=0.40
+PyYAML>=6.0
+python-dotenv>=1.0
+
+# Tier 3 — the ears and mouth (uncomment when you build voice)
+# deepgram-sdk>=3.0
+# elevenlabs>=1.0
+# sounddevice>=0.4
+# numpy>=1.24

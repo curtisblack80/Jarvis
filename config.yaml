@@ -1,0 +1,29 @@
+# Jarvis configuration — edit these without touching code.
+# Tunables live here on purpose (Tier 6: configuration over hardcoded values).
+
+identity:
+  name: Jarvis
+  # One-line purpose, woven into the system prompt.
+  purpose: >-
+    a personal assistant that has my back — reminds me of things, answers
+    questions about my notes, and drafts messages.
+  # Tone, also woven into the system prompt.
+  tone: warm, plain-spoken, and brief
+
+model:
+  # The brain. Kept here so swapping models is a one-line change.
+  provider: anthropic
+  name: claude-opus-4-8
+  max_tokens: 1024
+  temperature: 0.7
+
+# Tier 3 — voice. Unused until you build the ears and mouth.
+voice:
+  stt:
+    provider: deepgram
+    model: nova-2
+  tts:
+    provider: elevenlabs
+    # Pick your ElevenLabs voice id here; this default is a calm, natural voice.
+    voice_id: ""
+    model: eleven_turbo_v2_5
