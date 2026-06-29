@@ -53,6 +53,10 @@ def run(argv: list[str] | None = None) -> int:
         confirmer=gate.confirm,
     )
 
+    # Make Factory-approved sub-agents dispatchable in this live session, and
+    # keep picking up newly-approved ones without a restart (Tier 5).
+    _start_factory_watch(config, registry, gate.confirm)
+
     inbox = _start_heartbeat(config, name)
 
     if want_voice and _start_voice(agent, config, name):
@@ -61,6 +65,29 @@ def run(argv: list[str] | None = None) -> int:
         print("[voice] falling back to text — see the message above.\n")
 
     return _run_text(agent, name, n_tools=len(registry), inbox=inbox)
+
+
+def _start_factory_watch(config, registry, confirmer) -> None:
+    """Load already-approved spawned agents into the live tool registry and
+    poll for new ones, so a `python -m jarvis.factory approve` in another
+    terminal makes its agent dispatchable here without a restart.
+
+    Best-effort: a Factory that isn't set up must never stop the assistant from
+    starting, so any failure here is swallowed.
+    """
+    try:
+        from .factory.runtime import RegistryWatcher
+        from .provider import build_provider
+
+        watcher = RegistryWatcher(
+            registry=registry,
+            make_provider=lambda model: build_provider(config, model=model),
+            confirmer=confirmer,
+        )
+        watcher.refresh()  # existing approved agents, available immediately
+        watcher.start_polling(float(config.get("factory.watch_seconds", 30)))
+    except Exception:  # noqa: BLE001 — never block startup on the Factory
+        pass
 
 
 def _start_heartbeat(config, name: str):

@@ -74,5 +74,6 @@ def tools(memory: Memory) -> list[Tool]:
             },
             fn=forget,
             consequential=True,  # deletes data
+            factory_allowed=False,  # destructive — keep out of spawned agents' hands
         ),
     ]

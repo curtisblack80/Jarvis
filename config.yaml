@@ -26,6 +26,17 @@ safety:
   # How long an interactive confirmation may wait before it safely denies.
   confirm_timeout_seconds: 120
 
+# The Factory — the sub-agent that mints other sub-agents (jarvis/factory).
+# Operated via its CLI: `python -m jarvis.factory`.
+factory:
+  # Most new agents a single requester can stage in a rolling 24h window.
+  # Enforced at task creation, not approval, so a flood can't be queued.
+  daily_cap: 5
+  # How many reject-with-feedback rounds before a task auto-fails.
+  max_revisions: 3
+  # Poll interval for the host to pick up newly approved agents (Tier 5).
+  watch_seconds: 30
+
 # Tier 5 — the heartbeat (proactive loop). Quiet by default.
 heartbeat:
   enabled: true
