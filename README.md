@@ -46,7 +46,7 @@ way.
 | 2 | The hands — tool registry the model can call | ✅ |
 | 3 | The ears & mouth — push-to-talk voice (Deepgram + ElevenLabs) | ✅ |
 | 4 | The memory — durable facts across restarts | ✅ |
-| 5 | The heartbeat — proactive background loop | ⬜ |
+| 5 | The heartbeat — proactive background loop | ✅ |
 | 6 | The rails — confirmation gate, audit log, kill switch | ⬜ |
 
 ## Verify
@@ -56,6 +56,7 @@ python tests/test_tier1_brain.py     # core loop, no network needed
 python tests/test_tier2_tools.py     # tool registry + tool loop, no network
 python tests/test_tier3_voice.py     # chunker + voice-uses-same-brain, no audio
 python tests/test_tier4_memory.py    # durable facts survive restart + hand edits
+python tests/test_tier5_heartbeat.py # scheduling, quiet hours, hold, dismiss
 ```
 
 **Tier 1 by hand:** run `python -m jarvis`, hold a short back-and-forth, and
@@ -88,3 +89,19 @@ background knowledge, **not** commands) and manages them via `remember_fact`,
 fact by hand; the change is respected on the next run.
 
 **Tier 4 by hand:** tell it your name, quit, restart — it greets you knowing it.
+
+### The heartbeat (proactive)
+
+A background loop, started with the REPL (and runnable standalone with
+`python -m jarvis.proactive` for an always-on host). Checks live in
+`config.yaml` under `heartbeat` — what to check, how often, how loud. Surfaced
+items land in a held, dismissible inbox (`state/inbox.json`).
+
+- **Quiet by default:** routine notices just accumulate; only `alert`/`critical`
+  interrupt, and `alert` is held silently during `quiet_hours`.
+- In the REPL: `notices` lists them, `dismiss <id>` / `dismiss all` clears them,
+  and held notices are shown on your next start (catch-up-on-return).
+
+**Tier 5 by hand:** with the REPL running, `echo "tea is ready" > state/trigger.txt`
+and within ~10s you'll see a 🔔 alert; it won't repeat for the same text.
+Restart and the schedule resumes instead of refiring everything.

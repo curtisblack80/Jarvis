@@ -17,6 +17,26 @@ model:
   max_tokens: 1024
   temperature: 0.7
 
+# Tier 5 — the heartbeat (proactive loop). Quiet by default.
+heartbeat:
+  enabled: true
+  tick_seconds: 5          # how often the loop wakes to look for due checks
+  quiet_hours:             # non-urgent surfacing waits for waking hours
+    start: "22:00"
+    end: "07:00"
+  checks:
+    # Verification-friendly: create state/trigger.txt and it gets noticed.
+    - name: watch_file
+      every_seconds: 10
+      params:
+        path: state/trigger.txt
+        urgency: alert       # calm (held only) | alert (interrupts) | critical
+    # Surfaces reminders whose due time has passed; silent unless one is due.
+    - name: due_reminders
+      every_seconds: 30
+      params:
+        urgency: alert
+
 # Tier 3 — voice. Unused until you build the ears and mouth.
 voice:
   stt:

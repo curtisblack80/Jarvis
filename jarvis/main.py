@@ -37,12 +37,38 @@ def run(argv: list[str] | None = None) -> int:
         provider, build_system_prompt(config), registry=registry, memory=memory
     )
 
+    inbox = _start_heartbeat(config, name)
+
     if want_voice and _start_voice(agent, config, name):
         return 0  # voice ran (and has now exited)
     if want_voice:
         print("[voice] falling back to text — see the message above.\n")
 
-    return _run_text(agent, name, n_tools=len(registry))
+    return _run_text(agent, name, n_tools=len(registry), inbox=inbox)
+
+
+def _start_heartbeat(config, name: str):
+    """Start the proactive loop in a background thread; return its inbox.
+
+    Laptop-first: it beats while this process runs. The loop is front-end
+    agnostic — the same inbox can be read from text or voice — and relocatable
+    to an always-on host later.
+    """
+    from .proactive.checks import build_checks
+    from .proactive.heartbeat import Heartbeat
+    from .proactive.inbox import Inbox
+
+    inbox = Inbox()
+    if not config.get("heartbeat.enabled", True):
+        return inbox
+
+    def announce(notice) -> None:
+        # An alert interrupts: print it where the user will see it.
+        print(f"\n\n  🔔 {name}: {notice.text}  (#{notice.id})\nyou › ", end="", flush=True)
+
+    heartbeat = Heartbeat(build_checks(config), inbox, config, on_alert=announce)
+    heartbeat.start()
+    return inbox
 
 
 def _start_voice(agent: Agent, config, name: str) -> bool:
@@ -70,13 +96,20 @@ def _start_voice(agent: Agent, config, name: str) -> bool:
     return True
 
 
-def _run_text(agent: Agent, name: str, *, n_tools: int) -> int:
+def _run_text(agent: Agent, name: str, *, n_tools: int, inbox=None) -> int:
     n_facts = len(agent.memory.facts()) if agent.memory else 0
     knows = f", remembering {n_facts} things about you" if n_facts else ""
     print(
         f"{name} is awake with {n_tools} tools{knows}. "
-        f"Type to talk; Ctrl-D or 'quit' to leave.\n"
+        f"Type to talk; 'notices' to see what it raised; Ctrl-D or 'quit' to leave.\n"
     )
+
+    # Catch-up-on-return: show anything the heartbeat held while you were away.
+    if inbox and inbox.pending():
+        print(f"  While you were away, {name} noted:")
+        for n in inbox.pending():
+            print(n.pretty())
+        print("  (type 'dismiss <id>' to clear, or 'dismiss all')\n")
 
     def show_tool(tool_name: str, args: dict) -> None:
         # While building, it helps to see the hands move.
@@ -95,6 +128,8 @@ def _run_text(agent: Agent, name: str, *, n_tools: int) -> int:
         if user_text.lower() in {"quit", "exit"}:
             print(f"{name}: bye.")
             return 0
+        if inbox is not None and _handle_inbox_command(user_text, inbox):
+            continue
 
         # Stream the reply as it's generated — feels alive, and it's the same
         # streaming voice will lean on in Tier 3.
@@ -111,6 +146,30 @@ def _run_text(agent: Agent, name: str, *, n_tools: int) -> int:
             print(f"\n[!] I couldn't reach the model just now: {exc}\n")
 
     # Unreachable, but keeps type checkers happy.
+
+
+def _handle_inbox_command(text: str, inbox) -> bool:
+    """Handle 'notices' and 'dismiss …'. Returns True if it was such a command."""
+    low = text.lower()
+    if low in {"notices", "inbox"}:
+        pending = inbox.pending()
+        if not pending:
+            print("  Nothing in the inbox.\n")
+        else:
+            for n in pending:
+                print(n.pretty())
+            print()
+        return True
+    if low.startswith("dismiss"):
+        arg = text[len("dismiss"):].strip()
+        if arg in {"all", "*"}:
+            print(f"  Cleared {inbox.dismiss_all()} notice(s).\n")
+        elif arg.isdigit() and inbox.dismiss(int(arg)):
+            print(f"  Dismissed #{arg}.\n")
+        else:
+            print("  Usage: dismiss <id> | dismiss all\n")
+        return True
+    return False
 
 
 def _brief(args: dict) -> str:
