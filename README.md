@@ -24,13 +24,27 @@ python -m jarvis
 
 Type to talk; `quit` or Ctrl-D to leave.
 
+## Run (voice, push-to-talk)
+
+```bash
+pip install deepgram-sdk elevenlabs sounddevice numpy   # voice extras
+# set DEEPGRAM_API_KEY + ELEVENLABS_API_KEY in .env, and a voice id in config.yaml
+python -m jarvis --voice
+```
+
+Press Enter to start a turn, speak, press Enter to send. It shows the transcript
+(`heard › …`) next to its reply, speaks sentence-by-sentence as the reply
+streams, and starting a new turn interrupts speech (barge-in). If voice deps or
+keys are missing it prints why and falls back to text — the same brain either
+way.
+
 ## Tiers
 
 | Tier | What it adds | Status |
 |------|--------------|--------|
 | 1 | The brain — text conversation loop with session memory | ✅ |
 | 2 | The hands — tool registry the model can call | ✅ |
-| 3 | The ears & mouth — push-to-talk voice (Deepgram + ElevenLabs) | ⬜ |
+| 3 | The ears & mouth — push-to-talk voice (Deepgram + ElevenLabs) | ✅ |
 | 4 | The memory — durable facts across restarts | ⬜ |
 | 5 | The heartbeat — proactive background loop | ⬜ |
 | 6 | The rails — confirmation gate, audit log, kill switch | ⬜ |
@@ -40,6 +54,7 @@ Type to talk; `quit` or Ctrl-D to leave.
 ```bash
 python tests/test_tier1_brain.py     # core loop, no network needed
 python tests/test_tier2_tools.py     # tool registry + tool loop, no network
+python tests/test_tier3_voice.py     # chunker + voice-uses-same-brain, no audio
 ```
 
 **Tier 1 by hand:** run `python -m jarvis`, hold a short back-and-forth, and

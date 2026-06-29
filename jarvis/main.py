@@ -1,10 +1,11 @@
-"""Entry point — the typed interface (the brain's first, permanent front-end).
+"""Entry point — front-ends over the one shared brain.
 
-Run with:  python -m jarvis
+Run text (always works):   python -m jarvis
+Run push-to-talk voice:    python -m jarvis --voice
 
 The text path is never deleted. It's how every future change gets debugged, and
-the graceful fallback when audio misbehaves (Tier 3 wraps this, it does not
-replace it).
+the graceful fallback when audio misbehaves. Voice (Tier 3) wraps this same
+brain; it does not replace it.
 """
 
 from __future__ import annotations
@@ -17,7 +18,10 @@ from .provider import ProviderError, build_provider
 from .tools import build_default_registry
 
 
-def run() -> int:
+def run(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    want_voice = "--voice" in argv
+
     try:
         config = Config.load()
         provider = build_provider(config)
@@ -29,8 +33,42 @@ def run() -> int:
     registry = build_default_registry(config)
     agent = Agent(provider, build_system_prompt(config), registry=registry)
 
+    if want_voice and _start_voice(agent, config, name):
+        return 0  # voice ran (and has now exited)
+    if want_voice:
+        print("[voice] falling back to text — see the message above.\n")
+
+    return _run_text(agent, name, n_tools=len(registry))
+
+
+def _start_voice(agent: Agent, config, name: str) -> bool:
+    """Try to start the voice session. Returns False to fall back to text."""
+    from .voice.stt import VoiceUnavailable
+
+    try:
+        from .voice.audio import build_recorder
+        from .voice.session import VoiceSession
+        from .voice.stt import build_transcriber
+        from .voice.tts import build_speaker
+
+        session = VoiceSession(
+            agent,
+            recorder=build_recorder(config),
+            transcriber=build_transcriber(config),
+            speaker=build_speaker(config),
+            name=name,
+        )
+    except VoiceUnavailable as exc:
+        print(f"[voice] unavailable: {exc}")
+        return False
+
+    session.run()
+    return True
+
+
+def _run_text(agent: Agent, name: str, *, n_tools: int) -> int:
     print(
-        f"{name} is awake with {len(registry)} tools. "
+        f"{name} is awake with {n_tools} tools. "
         f"Type to talk; Ctrl-D or 'quit' to leave.\n"
     )
 
