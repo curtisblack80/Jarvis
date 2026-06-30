@@ -16,6 +16,9 @@ env/
 state/
 *.log
 
+# Factory-generated agent specs (regenerated per spawn; see jarvis/factory)
+agent-specs/
+
 # OS / editor
 .DS_Store
 .idea/

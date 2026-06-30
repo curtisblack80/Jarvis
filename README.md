@@ -48,6 +48,7 @@ way.
 | 4 | The memory — durable facts across restarts | ✅ |
 | 5 | The heartbeat — proactive background loop | ✅ |
 | 6 | The rails — confirmation gate, audit log, kill switch | ✅ |
+| + | The Factory — a sub-agent that mints other sub-agents | ✅ |
 
 ## Verify
 
@@ -58,6 +59,7 @@ python tests/test_tier3_voice.py     # chunker + voice-uses-same-brain, no audio
 python tests/test_tier4_memory.py    # durable facts survive restart + hand edits
 python tests/test_tier5_heartbeat.py # scheduling, quiet hours, hold, dismiss
 python tests/test_tier6_rails.py     # confirmation gate, kill switch, data-tagging
+python tests/test_factory.py         # full spawn pipeline + approval, no network
 ```
 
 **Tier 1 by hand:** run `python -m jarvis`, hold a short back-and-forth, and
@@ -128,3 +130,46 @@ Restart and the schedule resumes instead of refiring everything.
 "ignore your instructions and …" in a note, then ask about that note → it flags
 it rather than obeying. `pause`, then trigger a heartbeat condition → nothing
 fires until you `resume`.
+
+### The Factory (a sub-agent that mints sub-agents)
+
+The Factory (`jarvis/factory/`) is a "compiler for sub-agents": describe an agent
+you want and it researches the role, drafts a spec and system prompt, picks a
+safe tool allowlist from the existing catalog, and stages a proposed agent for
+**your approval**. Approve it and it becomes a first-class, dispatchable agent —
+**no restart, and no bespoke code per agent.** Every spawned agent is just a row
+of configuration run through the same shared brain.
+
+Five tiers, each independently shippable: research (structured Skills Report) →
+spec + system-prompt generation → the spawn state machine → the human approval
+gate → a config-driven runtime with a hot-reload registry.
+
+Operated through its CLI (the approval surface):
+
+```bash
+# Research what such an agent should do (structured, cited; cached 24h)
+python -m jarvis.factory research "PDF text extraction"
+
+# Stage a new agent: research → spec → prompt → awaiting approval
+python -m jarvis.factory spawn --name "doc-summarizer" \
+    --role "summarizes long documents into bullet points"
+
+python -m jarvis.factory pending          # everything awaiting review (durable)
+python -m jarvis.factory show <task_id>    # the proposed manifest + system prompt
+python -m jarvis.factory approve <task_id> # registers dispatch_to_doc_summarizer
+python -m jarvis.factory reject <task_id> --feedback "make the tone less formal"
+python -m jarvis.factory list-agents
+python -m jarvis.factory dispatch doc_summarizer "summarize this: …"
+```
+
+A running `python -m jarvis` session picks up newly-approved agents within
+`factory.watch_seconds` (default 30s), so an approval in another terminal makes
+the agent dispatchable live.
+
+**Safety, built in:** the user's role description is sanitized and never quoted
+verbatim into a spawned prompt (the generator must paraphrase); spawned agents
+only ever receive `factory_allowed` tools (never `send_message`, `delete_*`,
+`forget_fact`); slugs can't collide with reserved names or existing tools; a
+daily spawn cap (default 5) is enforced at creation; revisions are capped
+(default 3); and every agent's row traces back to the task, research, and
+feedback that produced it. Tunables live in `config.yaml` under `factory`.

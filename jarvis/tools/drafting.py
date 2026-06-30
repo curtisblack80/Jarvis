@@ -70,5 +70,6 @@ def tools() -> list[Tool]:
             },
             fn=_send,
             consequential=True,  # sends a message
+            factory_allowed=False,  # reaches another person — never hand to spawned agents
         ),
     ]

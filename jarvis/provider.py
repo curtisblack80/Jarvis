@@ -57,6 +57,7 @@ class Provider(Protocol):
         *,
         tools: list[dict[str, Any]] | None = None,
         on_text: OnText | None = None,
+        tool_choice: dict[str, Any] | None = None,
     ) -> TurnResult:
         ...
 
@@ -99,11 +100,12 @@ class AnthropicProvider:
         *,
         tools: list[dict[str, Any]] | None = None,
         on_text: OnText | None = None,
+        tool_choice: dict[str, Any] | None = None,
     ) -> TurnResult:
         attempt = 0
         while True:
             try:
-                return self._stream_once(system, messages, tools, on_text)
+                return self._stream_once(system, messages, tools, on_text, tool_choice)
             except self._retryable() as exc:
                 attempt += 1
                 if attempt > self.max_retries:
@@ -129,6 +131,7 @@ class AnthropicProvider:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None,
         on_text: OnText | None,
+        tool_choice: dict[str, Any] | None = None,
     ) -> TurnResult:
         kwargs: dict[str, Any] = {
             "model": self.model,
@@ -139,6 +142,11 @@ class AnthropicProvider:
         }
         if tools:
             kwargs["tools"] = tools
+        # Forcing a specific tool (e.g. the Factory's emit_skills_report on the
+        # last research turn) is the reliability trick that guarantees a
+        # structured emit instead of the model meandering past its budget.
+        if tool_choice:
+            kwargs["tool_choice"] = tool_choice
 
         with self._client.messages.stream(**kwargs) as stream:
             for delta in stream.text_stream:
@@ -169,13 +177,17 @@ class AnthropicProvider:
         )
 
 
-def build_provider(config) -> Provider:
-    """Construct the configured provider. The only place that picks an impl."""
+def build_provider(config, *, model: str | None = None) -> Provider:
+    """Construct the configured provider. The only place that picks an impl.
+
+    ``model`` overrides the configured model name — used by Factory-spawned
+    agents, which may each run on a different model than the host default.
+    """
     name = config.get("model.provider", "anthropic")
     if name == "anthropic":
         return AnthropicProvider(
             api_key=config.secret("ANTHROPIC_API_KEY"),
-            model=config.get("model.name", "claude-opus-4-8"),
+            model=model or config.get("model.name", "claude-opus-4-8"),
             max_tokens=int(config.get("model.max_tokens", 1024)),
             temperature=float(config.get("model.temperature", 0.7)),
         )

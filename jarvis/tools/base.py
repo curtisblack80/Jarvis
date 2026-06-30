@@ -36,6 +36,10 @@ class Tool:
     fn: ToolFn
     # True if it sends, spends, deletes, or changes a setting (Tier 6 gates it).
     consequential: bool = False
+    # False to keep this tool out of the hands of Factory-spawned agents
+    # (secrets, payments, sends, deletes). The Factory only offers the
+    # registry's ``factory_allowed`` tools to the agents it mints.
+    factory_allowed: bool = True
 
     def spec(self) -> dict[str, Any]:
         """The provider-facing tool definition."""
@@ -56,17 +60,36 @@ class ToolRegistry:
     def __init__(self) -> None:
         self._tools: dict[str, Tool] = {}
 
-    def register(self, tool: Tool) -> None:
-        if tool.name in self._tools:
+    def register(self, tool: Tool, *, replace: bool = False) -> None:
+        if tool.name in self._tools and not replace:
             raise ValueError(f"Tool already registered: {tool.name}")
         self._tools[tool.name] = tool
+
+    def unregister(self, name: str) -> bool:
+        """Remove a tool by name. Returns True if one was removed.
+
+        Used by the Factory's registry watcher to retire a ``dispatch_to_<slug>``
+        tool when its spawned agent is archived — hot-unload without a restart.
+        """
+        return self._tools.pop(name, None) is not None
+
+    def has(self, name: str) -> bool:
+        return name in self._tools
 
     def get(self, name: str) -> Tool | None:
         return self._tools.get(name)
 
+    def list_all(self) -> list[Tool]:
+        """Every registered tool object (not just its spec)."""
+        return list(self._tools.values())
+
     def specs(self) -> list[dict[str, Any]]:
         """All tool specs, handed to the model each turn."""
         return [t.spec() for t in self._tools.values()]
+
+    def factory_allowed_names(self) -> list[str]:
+        """Names the Factory may offer to spawned agents — the safe subset."""
+        return [t.name for t in self._tools.values() if t.factory_allowed]
 
     def is_consequential(self, name: str) -> bool:
         tool = self._tools.get(name)
