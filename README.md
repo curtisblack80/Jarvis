@@ -166,6 +166,31 @@ A running `python -m jarvis` session picks up newly-approved agents within
 `factory.watch_seconds` (default 30s), so an approval in another terminal makes
 the agent dispatchable live.
 
+**Conversational use (in the REPL).** The Factory is also wired into the main
+assistant as a `dispatch_to_factory` tool, so you can just ask:
+
+```
+you › build me an agent that summarizes long PDFs into bullet points
+Jarvis › I've designed "PDF Summarizer" <pdf_summarizer> … it's awaiting your
+         approval. Type `factory approve <task_id>` to make it live.
+```
+
+Designing an agent is something the model can do; **making it live stays a
+human, typed command** — the approval gate is never a model-invoked action.
+Approve/review from inside the REPL:
+
+```
+factory pending              # tasks awaiting your approval
+factory show <task_id>       # full proposed manifest + system prompt
+factory approve <task_id>    # registers dispatch_to_<slug>, live immediately
+factory reject <task_id> make the tone warmer   # revise (re-runs prompt gen)
+factory agents               # list spawned agents
+```
+
+Once approved, the new agent is dispatchable in the same conversation (the
+parent can call `dispatch_to_<slug>`, or you can use `python -m jarvis.factory
+dispatch <slug> "…"`).
+
 **Safety, built in:** the user's role description is sanitized and never quoted
 verbatim into a spawned prompt (the generator must paraphrase); spawned agents
 only ever receive `factory_allowed` tools (never `send_message`, `delete_*`,

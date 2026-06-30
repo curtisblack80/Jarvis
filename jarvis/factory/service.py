@@ -19,6 +19,7 @@ from .. import audit
 from ..provider import Provider, build_provider
 from ..tools import build_default_registry
 from ..tools.base import ToolRegistry
+from ..tools.base import Tool, ToolResult
 from . import approval
 from .models import SpawnTask
 from .pipeline import SpawnPipeline
@@ -26,7 +27,7 @@ from .repo import ResearchReportRepo, SpawnedAgentRepo, SpawnTaskRepo
 from .runtime import ConfigDrivenAgent, RegistryWatcher
 from .sanitize import sanitize
 from .slugs import pick_slug, slugify
-from .state import TERMINAL
+from .state import TERMINAL, State
 
 # Strong references to background pipeline threads so a fire-and-forget run can't
 # be collected mid-flight (the threaded analogue of the asyncio weak-ref trap).
@@ -57,12 +58,13 @@ class FactoryService:
         self.daily_cap = int(config.get("factory.daily_cap", 5))
         self.max_revisions = int(config.get("factory.max_revisions", 3))
 
+        # The watcher reads the agents store fresh on each refresh (its default),
+        # so it also picks up agents approved by another process (the CLI). In-
+        # process approvals write to disk before notifying, so both views agree.
         self.watcher = RegistryWatcher(
             registry=self.registry,
             make_provider=self.make_provider,
             confirmer=confirmer,
-            load_active=lambda: self.agents.list_active(),
-            load_row=lambda slug: self.agents.by_slug(slug),
         )
         self.watcher.refresh()  # load already-approved agents on startup
 
@@ -207,3 +209,85 @@ class FactoryService:
             confirmer=self.confirmer,
         )
         return agent.run(message)
+
+    # --- the Factory as a tool (conversational entry point) ----------------
+
+    def factory_tool(self) -> Tool:
+        """A `dispatch_to_factory` tool: the parent agent calls it to *design* a
+        new sub-agent. It stages a proposal and returns it — it deliberately does
+        NOT approve, so the human gate is preserved (approval is a typed command,
+        never a model-invoked action).
+        """
+
+        def _run(args: dict[str, Any]) -> ToolResult:
+            name = args.get("name", "")
+            role = args.get("role", "")
+            reqs = args.get("requirements", "") or ""
+            try:
+                task = self.create_task(
+                    name_hint=name, role_description=role, special_requirements=reqs
+                )
+            except Exception as exc:  # noqa: BLE001 — cap/slug/unsafe/validation
+                return ToolResult(f"Couldn't start the Factory: {exc}", is_error=True)
+            try:
+                result = self.run_pipeline(task.id)
+            except Exception as exc:  # noqa: BLE001 — pipeline already recorded FAILED
+                return ToolResult(
+                    f"The Factory failed while designing '{name}' (task {task.id}): {exc}",
+                    is_error=True,
+                )
+            if result.state is not State.AWAITING_APPROVAL:
+                return ToolResult(
+                    f"The Factory ended in '{result.status}'"
+                    + (f": {result.error}" if result.error else ""),
+                    is_error=True,
+                )
+            m = result.proposed_manifest or {}
+            granted = ", ".join(m.get("tool_allowlist", [])) or "none"
+            wishlist = ", ".join(w["name"] for w in m.get("tools_wishlist", [])) or "none"
+            return ToolResult(
+                "Designed a new agent — it is NOT live yet and needs the user's "
+                "approval:\n"
+                f"  name: {m['name']} <{m['slug']}>\n"
+                f"  specialty: {m['specialty']}\n"
+                f"  tools it would get: {granted}\n"
+                f"  tools it wishes existed: {wishlist}\n"
+                f"  task id: {task.id}\n"
+                "Tell the user it is awaiting their approval and that they can type "
+                f"`factory approve {task.id}` to make it live, `factory show "
+                f"{task.id}` to read its full system prompt, or `factory reject "
+                f"{task.id} <feedback>` to revise it."
+            )
+
+        return Tool(
+            name="dispatch_to_factory",
+            description=(
+                "Design a brand-new specialist sub-agent for the user. Use this "
+                "when the user asks you to build, create, make, or spin up an "
+                "agent / assistant / bot for some role. Provide a short 'name', a "
+                "one-paragraph 'role' description, and optional 'requirements'. "
+                "This researches the role and drafts a proposed agent but does NOT "
+                "make it live — the user must approve it. Returns the proposal and "
+                "a task id."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Short name for the new agent, e.g. 'doc-summarizer'.",
+                    },
+                    "role": {
+                        "type": "string",
+                        "description": "One-paragraph description of what the agent should do.",
+                    },
+                    "requirements": {
+                        "type": "string",
+                        "description": "Optional special requirements or constraints.",
+                    },
+                },
+                "required": ["name", "role"],
+            },
+            fn=_run,
+            factory_allowed=False,  # the Factory is never handed to spawned agents
+        )

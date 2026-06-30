@@ -355,6 +355,45 @@ def test_archived_agent_unregisters_on_refresh():
     assert not svc.registry.has("dispatch_to_temp")
 
 
+# === dispatch_to_factory tool + REPL approval command =====================
+
+def test_factory_tool_stages_a_proposal_without_approving():
+    _isolate()
+    svc = _service()
+    tool = svc.factory_tool()
+    assert tool.name == "dispatch_to_factory"
+    assert tool.factory_allowed is False  # never handed to spawned agents
+    res = tool.fn({"name": "scribe2", "role": "summarize meeting notes"})
+    assert not res.is_error
+    assert "awaiting" in res.content.lower()
+    # Staged for review — but the human gate is preserved: nothing is live.
+    pending = svc.pending()
+    assert len(pending) == 1
+    assert pending[0].proposed_manifest["slug"] == "scribe2"
+    assert not svc.registry.has("dispatch_to_scribe2")
+    assert svc.list_agents() == []
+
+
+def test_repl_factory_approve_command_makes_agent_live():
+    import contextlib
+    import io
+
+    from jarvis.main import _handle_factory_command
+
+    _isolate()
+    svc = _service()
+    task = svc.create_task(name_hint="liveone", role_description="do tasks")
+    svc.run_pipeline(task.id)
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        handled = _handle_factory_command(f"factory approve {task.id}", svc)
+    assert handled
+    assert svc.registry.has("dispatch_to_liveone")  # dispatch tool now live
+    assert "live" in buf.getvalue().lower()
+    # A non-factory line is left for the agent.
+    assert _handle_factory_command("what's the weather", svc) is False
+
+
 # === daily cap ============================================================
 
 def test_daily_cap_enforced_at_creation():

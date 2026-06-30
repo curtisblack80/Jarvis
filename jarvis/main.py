@@ -53,9 +53,11 @@ def run(argv: list[str] | None = None) -> int:
         confirmer=gate.confirm,
     )
 
-    # Make Factory-approved sub-agents dispatchable in this live session, and
-    # keep picking up newly-approved ones without a restart (Tier 5).
-    _start_factory_watch(config, registry, gate.confirm)
+    # Wire in the Factory: register the `dispatch_to_factory` tool so the user
+    # can design new sub-agents by voice/text, load already-approved agents into
+    # the live registry, and poll for newly-approved ones — all without a
+    # restart (Tier 5). Approval stays a typed command (see _run_text).
+    factory = _start_factory(config, registry, gate.confirm)
 
     inbox = _start_heartbeat(config, name)
 
@@ -64,30 +66,28 @@ def run(argv: list[str] | None = None) -> int:
     if want_voice:
         print("[voice] falling back to text — see the message above.\n")
 
-    return _run_text(agent, name, n_tools=len(registry), inbox=inbox)
+    return _run_text(agent, name, n_tools=len(registry), inbox=inbox, factory=factory)
 
 
-def _start_factory_watch(config, registry, confirmer) -> None:
-    """Load already-approved spawned agents into the live tool registry and
-    poll for new ones, so a `python -m jarvis.factory approve` in another
-    terminal makes its agent dispatchable here without a restart.
+def _start_factory(config, registry, confirmer):
+    """Build the shared Factory service, register its `dispatch_to_factory`
+    tool, and start watching for approved agents. Returns the service so the
+    REPL can drive its human approval commands, or None on failure.
 
     Best-effort: a Factory that isn't set up must never stop the assistant from
     starting, so any failure here is swallowed.
     """
     try:
-        from .factory.runtime import RegistryWatcher
-        from .provider import build_provider
+        from .factory.service import FactoryService
 
-        watcher = RegistryWatcher(
-            registry=registry,
-            make_provider=lambda model: build_provider(config, model=model),
-            confirmer=confirmer,
-        )
-        watcher.refresh()  # existing approved agents, available immediately
-        watcher.start_polling(float(config.get("factory.watch_seconds", 30)))
+        # Share the live registry + confirmer so designed agents see the real
+        # tool catalog and approved ones register straight into this session.
+        factory = FactoryService(config, registry=registry, confirmer=confirmer)
+        registry.register(factory.factory_tool(), replace=True)
+        factory.watcher.start_polling(float(config.get("factory.watch_seconds", 30)))
+        return factory
     except Exception:  # noqa: BLE001 — never block startup on the Factory
-        pass
+        return None
 
 
 def _start_heartbeat(config, name: str):
@@ -145,12 +145,14 @@ def _start_voice(agent: Agent, config, name: str) -> bool:
     return True
 
 
-def _run_text(agent: Agent, name: str, *, n_tools: int, inbox=None) -> int:
+def _run_text(agent: Agent, name: str, *, n_tools: int, inbox=None, factory=None) -> int:
     n_facts = len(agent.memory.facts()) if agent.memory else 0
     knows = f", remembering {n_facts} things about you" if n_facts else ""
+    factory_help = "\n  factory: pending · show <id> · approve <id> · reject <id> <feedback>" if factory else ""
     print(
         f"{name} is awake with {n_tools} tools{knows}.\n"
-        f"  commands: notices · dismiss <id> · pause · resume · log · quit\n"
+        f"  commands: notices · dismiss <id> · pause · resume · log · quit"
+        f"{factory_help}\n"
     )
 
     # Catch-up-on-return: show anything the heartbeat held while you were away.
@@ -180,6 +182,8 @@ def _run_text(agent: Agent, name: str, *, n_tools: int, inbox=None) -> int:
             print(f"{name}: bye.")
             return 0
         if inbox is not None and _handle_inbox_command(user_text, inbox):
+            continue
+        if factory is not None and _handle_factory_command(user_text, factory):
             continue
         if _handle_control_command(user_text, name, agent):
             continue
@@ -257,6 +261,80 @@ def _handle_inbox_command(text: str, inbox) -> bool:
             print("  Usage: dismiss <id> | dismiss all\n")
         return True
     return False
+
+
+def _handle_factory_command(text: str, factory) -> bool:
+    """Handle the human side of the Factory: 'factory pending | show <id> |
+    approve <id> | reject <id> <feedback>'. Returns True if it was such a
+    command.
+
+    Approval lives here, as a *typed* command, on purpose: the model can design
+    an agent (via the dispatch_to_factory tool) but only the human makes it live.
+    """
+    low = text.lower().strip()
+    if low != "factory" and not low.startswith("factory "):
+        return False
+
+    parts = text.split(maxsplit=2)  # ["factory", "<verb>", "<rest>"]
+    verb = parts[1].lower() if len(parts) > 1 else "pending"
+    rest = parts[2] if len(parts) > 2 else ""
+
+    try:
+        if verb in {"pending", "list"}:
+            tasks = factory.pending()
+            if not tasks:
+                print("  Nothing awaiting approval.\n")
+            else:
+                print(f"  {len(tasks)} awaiting approval (newest first):")
+                for t in tasks:
+                    m = t.proposed_manifest or {}
+                    print(f"    {t.id}  {m.get('name', t.name_hint)} "
+                          f"<{m.get('slug', '?')}>  (revisions: {t.approval_iterations})")
+                print()
+        elif verb == "agents":
+            agents = factory.list_agents()
+            if not agents:
+                print("  No spawned agents yet.\n")
+            else:
+                for a in agents:
+                    print(f"    {a.slug:24} {a.status:8} {a.name}  ({a.specialty})")
+                print()
+        elif verb == "show":
+            task = factory.get_task(rest.strip())
+            if task is None:
+                print(f"  No such task: {rest.strip()}\n")
+            else:
+                _print_factory_task(task)
+        elif verb == "approve":
+            res = factory.approve(rest.strip())
+            print(f"  ✓ Approved — dispatch_to_{res['slug']} is now live.\n")
+        elif verb == "reject":
+            bits = rest.split(maxsplit=1)
+            task_id = bits[0].strip() if bits else ""
+            feedback = bits[1].strip() if len(bits) > 1 else None
+            res = factory.reject(task_id, feedback=feedback)
+            print(f"  reject → {res['status']}"
+                  + (f" ({res['error']})" if res.get("error") else "") + "\n")
+        else:
+            print("  Usage: factory pending | agents | show <id> | "
+                  "approve <id> | reject <id> <feedback>\n")
+    except (KeyError, ValueError) as exc:
+        print(f"  Factory: {exc}\n")
+    return True
+
+
+def _print_factory_task(task) -> None:
+    m = task.proposed_manifest or {}
+    print(f"  task {task.id}  (status: {task.status}, revisions: {task.approval_iterations})")
+    if task.error:
+        print(f"    last error: {task.error}")
+    if m:
+        print(f"    {m['name']} <{m['slug']}> — {m['specialty']}")
+        print(f"    tools: {', '.join(m.get('tool_allowlist', [])) or 'none'}")
+        print("    system prompt:")
+        for line in m.get("system_prompt", "").splitlines():
+            print(f"      | {line}")
+    print()
 
 
 def _brief(args: dict) -> str:
